@@ -10,7 +10,7 @@ from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from app.db import SessionLocal
 from app.graph import build_graph
 from app.models import AgentRun, CheckIn, LearningProfileVersion, LearningProposalRow, PlanningRun, Profile
-from app.provider import generate
+from app.provider import MODEL, PROVIDER, generate
 from app.schemas import LearningProposal
 
 celery_app = Celery("fitness-agent", broker=os.getenv("REDIS_URL", "redis://localhost:6379/0"), backend=os.getenv("REDIS_URL", "redis://localhost:6379/0"))
@@ -60,6 +60,8 @@ def run_planning(run_id: str):
                         "old_value": old_value,
                     }, LearningProposal))
                     proposal = learning.model_dump()
+                    proposal["_provider"] = PROVIDER
+                    proposal["_model"] = MODEL
                     cited_ids = set(proposal["evidence_ids"])
                     valid_evidence = cited_ids.issubset(set(evidence_ids)) and len(cited_ids) >= 3
                     safe_auto = (
