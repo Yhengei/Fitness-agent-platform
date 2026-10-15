@@ -6,13 +6,25 @@ import weakref
 from typing import Any
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 PROVIDER = os.getenv("MODEL_PROVIDER", "fake")
-MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
 OLLAMA_URL = os.getenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434")
+MODEL_BASE_URL = os.getenv("MODEL_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "qwen-plus")
+MODEL_API_KEY = os.getenv("MODEL_API_KEY", "")
+MODEL = MODEL_NAME if PROVIDER == "openai_compatible" else OLLAMA_MODEL
 MODEL_GATES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 MODEL_GATES_LOCK = threading.Lock()
+
+
+class ProviderError(RuntimeError):
+    pass
+
+
+class RetryableProviderError(RuntimeError):
+    pass
 
 
 def model_gate() -> asyncio.Semaphore:
@@ -28,6 +40,129 @@ def model_gate() -> asyncio.Semaphore:
 async def generate(agent: str, context: dict[str, Any], schema: type[BaseModel]) -> BaseModel:
     if PROVIDER == "fake":
         return fake_result(agent, context, schema)
+    if PROVIDER == "ollama":
+        return await generate_ollama(agent, context, schema)
+    if PROVIDER == "openai_compatible":
+        return await generate_openai_compatible(agent, context, schema)
+    raise ProviderError(f"Unsupported model provider: {PROVIDER}")
+
+
+def runtime_metadata() -> dict[str, str | bool | None]:
+    modes = {
+        "fake": ("Simulated Provider", "simulated"),
+        "ollama": ("Ollama", "live-local"),
+        "openai_compatible": ("Alibaba Cloud Bailian", "live-cloud"),
+    }
+    label, mode = modes.get(PROVIDER, (PROVIDER, "unknown"))
+    configured = bool(MODEL_API_KEY.strip()) if PROVIDER == "openai_compatible" else False
+    return {
+        "provider": PROVIDER,
+        "provider_label": label,
+        "model": MODEL,
+        "mode": mode,
+        "api_key_configured": configured,
+        "api_key_hint": mask_api_key(MODEL_API_KEY) if configured else None,
+    }
+
+
+def mask_api_key(value: str) -> str | None:
+    clean = value.strip()
+    return f"****{clean[-4:]}" if len(clean) >= 8 else None
+
+
+def cloud_configuration_error() -> str | None:
+    if not MODEL_BASE_URL.strip() or not MODEL_NAME.strip() or not MODEL_API_KEY.strip():
+        return "Cloud model is not configured. Set MODEL_BASE_URL, MODEL_NAME, and MODEL_API_KEY."
+    return None
+
+
+def configuration_error() -> str | None:
+    if PROVIDER == "openai_compatible":
+        return cloud_configuration_error()
+    if PROVIDER not in {"fake", "ollama", "openai_compatible"}:
+        return f"Unsupported model provider: {PROVIDER}"
+    return None
+
+
+def _client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=90)
+
+
+def _messages(agent: str, context: dict[str, Any], schema: type[BaseModel]) -> list[dict[str, str]]:
+    schema_text = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+    return [
+        {
+            "role": "system",
+            "content": f"{system_prompt(agent)} 输出必须匹配此 JSON Schema：{schema_text}",
+        },
+        {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+    ]
+
+
+def _strip_json_fence(content: str) -> str:
+    stripped = content.strip()
+    if stripped.startswith("```") and stripped.endswith("```"):
+        first_break = stripped.find("\n")
+        if first_break != -1:
+            stripped = stripped[first_break + 1 : -3].strip()
+    return stripped
+
+
+async def generate_openai_compatible(
+    agent: str, context: dict[str, Any], schema: type[BaseModel]
+) -> BaseModel:
+    if error := cloud_configuration_error():
+        raise ProviderError(error)
+    messages = _messages(agent, context, schema)
+    endpoint = f"{MODEL_BASE_URL.rstrip('/')}/chat/completions"
+    async with model_gate():
+        for attempt in range(2):
+            try:
+                async with _client() as client:
+                    response = await client.post(
+                        endpoint,
+                        headers={"Authorization": f"Bearer {MODEL_API_KEY}"},
+                        json={
+                            "model": MODEL_NAME,
+                            "messages": messages,
+                            "temperature": 0.2,
+                            "response_format": {"type": "json_object"},
+                        },
+                    )
+                if response.status_code in {401, 403}:
+                    raise ProviderError("Bailian authentication failed. Check MODEL_API_KEY.")
+                if response.status_code == 429 or response.status_code >= 500:
+                    raise RetryableProviderError(f"Bailian is temporarily unavailable ({response.status_code}).")
+                if response.status_code >= 400:
+                    raise ProviderError(f"Bailian rejected the request ({response.status_code}).")
+                try:
+                    content = response.json()["choices"][0]["message"]["content"]
+                    if not isinstance(content, str):
+                        raise TypeError("model content must be text")
+                    return schema.model_validate_json(_strip_json_fence(content))
+                except (KeyError, IndexError, TypeError, ValueError, ValidationError) as exc:
+                    raise RetryableProviderError("Bailian returned invalid structured output.") from exc
+            except ProviderError:
+                raise
+            except (httpx.TimeoutException, httpx.TransportError) as exc:
+                retry_error = RetryableProviderError("Bailian request timed out or could not connect.")
+                retry_error.__cause__ = exc
+            except RetryableProviderError as exc:
+                retry_error = exc
+            if attempt == 0:
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "上次请求未成功或输出不合格。请仅输出一个严格匹配 JSON Schema 的 JSON 对象。",
+                    }
+                )
+                await asyncio.sleep(0.25)
+                continue
+            raise ProviderError(str(retry_error)) from retry_error
+    raise ProviderError("Bailian request failed.")
+
+
+async def generate_ollama(agent: str, context: dict[str, Any], schema: type[BaseModel]) -> BaseModel:
     messages = [
         {"role": "system", "content": system_prompt(agent)},
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
@@ -39,7 +174,7 @@ async def generate(agent: str, context: dict[str, Any], schema: type[BaseModel])
                 async with httpx.AsyncClient(timeout=90) as client:
                     response = await client.post(
                         f"{OLLAMA_URL.rstrip('/')}/api/chat",
-                        json={"model": MODEL, "messages": messages, "stream": False, "format": schema.model_json_schema()},
+                        json={"model": OLLAMA_MODEL, "messages": messages, "stream": False, "format": schema.model_json_schema()},
                     )
                     response.raise_for_status()
                     raw = response.json()["message"]["content"]
@@ -48,7 +183,7 @@ async def generate(agent: str, context: dict[str, Any], schema: type[BaseModel])
                 last_error = exc
                 if attempt == 0:
                     messages.append({"role": "user", "content": "上次输出无效。请仅根据给定上下文重新生成，严格符合 JSON Schema。"})
-        raise RuntimeError(f"{agent} provider failed after one retry: {last_error}") from last_error
+        raise ProviderError(f"Ollama provider failed after one retry: {type(last_error).__name__}") from last_error
 
 
 def system_prompt(agent: str) -> str:

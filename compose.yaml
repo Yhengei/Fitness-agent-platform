@@ -18,6 +18,9 @@ services:
       WEB_PORT: ${WEB_PORT:-8080}
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
       OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:3b}
+      MODEL_BASE_URL: ${MODEL_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      MODEL_NAME: ${MODEL_NAME:-qwen-plus}
+      MODEL_API_KEY: ${MODEL_API_KEY:-}
       AGENT_CONCURRENCY: "1"
       TZ: Asia/Shanghai
     ports: ["127.0.0.1:${API_PORT:-8000}:8000"]

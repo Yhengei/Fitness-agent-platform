@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useState } from 'react';
 type Agent = { id: string; agent: string; status: string; output?: Record<string, any>; error?: string; duration_ms?: number };
 type Run = { id: string; status: string; provider: string; model: string; plan?: Record<string, any>; conflicts: Record<string, any>[]; agents: Agent[] };
 type Proposal = { id: string; status: string; parameter: string; proposed_value: string | number; sample_count: number; confidence: string; rationale: string };
+type Runtime = { provider: string; provider_label: string; model: string; mode: string; api_key_configured: boolean; api_key_hint: string | null };
 const names: Record<string, string> = { quality: '数据质检 Agent', recovery: '恢复 Agent', training: '训练 Agent', fat_loss: '减脂 Agent', review: '冲突复核 Agent', coach: '总教练 Agent', risk: '风险审核 Agent' };
 const today = () => {
   const now = new Date();
@@ -10,7 +11,7 @@ const today = () => {
 };
 
 export default function App() {
-  const [runtime, setRuntime] = useState({ provider: 'checking', model: '', mode: '' });
+  const [runtime, setRuntime] = useState<Runtime>({ provider: 'checking', provider_label: '', model: '', mode: '', api_key_configured: false, api_key_hint: null });
   const [profile, setProfile] = useState({ experience: 'beginner', weekly_days: 3, session_minutes: 60, limitations: '', preferences: '' });
   const [entry, setEntry] = useState({ date: today(), energy: 3, fatigue: 2, sleep_hours: '', weight_kg: '', completion: 'none', completion_pct: 100, did_train: false, rpe: '', pain: false, notes: '' });
   const [exercise, setExercise] = useState({ name: '', sets: 3, reps: 8, load_kg: '' });
@@ -21,7 +22,7 @@ export default function App() {
   const [message, setMessage] = useState('');
 
   useEffect(() => {
-    fetch('/api/v1/system/runtime').then(r => r.json()).then(setRuntime).catch(() => setRuntime({ provider: 'unavailable', model: '', mode: 'unavailable' }));
+    fetch('/api/v1/system/runtime').then(r => r.json()).then(setRuntime).catch(() => setRuntime({ provider: 'unavailable', provider_label: '', model: '', mode: 'unavailable', api_key_configured: false, api_key_hint: null }));
     fetch('/api/v1/profile').then(r => r.json()).then(r => r.data && Object.keys(r.data).length && setProfile(current => ({ ...current, ...r.data }))).catch(() => {});
     refreshInsights();
   }, []);
@@ -64,10 +65,13 @@ export default function App() {
     } catch (error) { setBusy(false); setMessage(error instanceof Error ? error.message : '请求失败'); }
   }
 
-  const runtimeLabel = runtime.mode === 'simulated' ? '模拟 Provider' : runtime.mode === 'live-local' ? `Ollama · ${runtime.model}` : runtime.mode === 'unavailable' ? 'API 不可用' : '服务检查中';
+  const cloudMissingKey = runtime.mode === 'live-cloud' && !runtime.api_key_configured;
+  const runtimeLabel = runtime.mode === 'simulated' ? '模拟推理' : runtime.mode === 'live-local' ? '本地真实推理' : runtime.mode === 'live-cloud' ? '云端真实推理' : runtime.mode === 'unavailable' ? 'API 不可用' : '服务检查中';
+  const runtimeDetail = runtime.mode === 'live-cloud' ? `${runtime.provider_label} · ${runtime.model} · ${cloudMissingKey ? 'API KEY 未配置' : runtime.api_key_hint ? `API KEY ${runtime.api_key_hint}` : 'API KEY 已配置'}` : runtime.mode === 'live-local' ? `Ollama · ${runtime.model}` : runtime.mode === 'simulated' ? '确定性规则 · 无模型调用' : '';
+  const privacyLabel = runtime.mode === 'live-cloud' ? '云端推理 · 健身上下文发送至百炼' : '本机运行 · 无云端模型传输';
   return <div className="shell">
-    <aside className="rail"><div className="brand"><b>F</b><span>FORM<small>AGENT TRAINING</small></span></div><div className="rail-label">WORKSPACE</div><a className="rail-link selected"><i>01</i>今日工作台</a><a className="rail-link"><i>02</i>运行追踪</a><a className="rail-link"><i>03</i>学习画像</a><div className="rail-bottom"><span className="local-dot"/>本机运行 · 数据不出本机</div></aside>
-    <main><header className="top"><span>PERSONAL SYSTEM <b>/</b> AGENT ORCHESTRATION</span><div className="provider"><span className="local-dot"/>{runtimeLabel}</div></header>
+    <aside className="rail"><div className="brand"><b>F</b><span>FORM<small>AGENT TRAINING</small></span></div><div className="rail-label">WORKSPACE</div><a className="rail-link selected"><i>01</i>今日工作台</a><a className="rail-link"><i>02</i>运行追踪</a><a className="rail-link"><i>03</i>学习画像</a><div className="rail-bottom"><span className={`local-dot ${runtime.mode === 'live-cloud' ? 'cloud' : ''}`}/>{privacyLabel}</div></aside>
+    <main><header className="top"><span>PERSONAL SYSTEM <b>/</b> AGENT ORCHESTRATION</span><div className={`provider ${cloudMissingKey ? 'provider-warning' : ''}`}><span className={`local-dot ${runtime.mode === 'live-cloud' ? 'cloud' : ''}`}/><div><strong>{runtimeLabel}</strong>{runtimeDetail && <small>{runtimeDetail}</small>}</div></div></header>
       <section className="intro"><div><small>FITNESS DECISION SUPPORT</small><h1>训练工作台</h1><p>每日记录驱动独立 Agent 分析、冲突复核与证据化训练调整。</p></div><div className="model-stamp"><strong>07</strong><span>INDEPENDENT<br/>AGENTS</span></div></section>
       <div className="workspace">
         <form className="panel log-panel" onSubmit={submit}><div className="panel-head"><div><small>01 / INPUT</small><h2>每日状态记录</h2></div><span>手动录入</span></div>
@@ -90,11 +94,11 @@ export default function App() {
           {run && <><div className="run-meta"><span>RUN ID <b>{run.id.slice(0, 8)}</b></span><span>{run.provider} / {run.model}</span></div><div className="timeline">{['quality','recovery','training','fat_loss','review','coach','risk','learning'].map((key, i) => { const agent = run.agents.find(a => a.agent === key); const skipped = key === 'review' && !run.agents.some(a => a.agent === 'review') && run.status === 'completed'; return <article className={`agent-row ${agent?.status || (skipped ? 'skipped' : 'waiting')}`} key={key}><div className="node"><span>{String(i + 1).padStart(2,'0')}</span></div><div className="agent-copy"><div className="agent-title"><strong>{names[key] || '学习 Agent'}</strong><span>{agent?.status || (skipped ? 'no conflict' : 'queued')}</span></div>{agent?.output && <><p>{agent.output.rationale || agent.output.summary || agent.output.decision}</p><details><summary>结构化输出与证据</summary><pre>{JSON.stringify(agent.output, null, 2)}</pre></details></>}{agent?.error && <p className="error">{agent.error}</p>}</div><small className="duration">{agent?.duration_ms != null ? `${agent.duration_ms} ms` : ''}</small></article>; })}</div>
           {run.plan && <div className="final-plan"><small>FINAL / RISK-GATED PLAN</small><h3>{run.plan.title}</h3><p>{run.plan.summary}</p><div className="exercise-list">{(run.plan.exercises || []).map((exercise: any, i: number) => <div className="exercise" key={i}><b>{exercise.name}</b><span>{exercise.sets} × {exercise.reps}{exercise.load_kg ? ` · ${exercise.load_kg} kg` : ''}</span></div>)}</div><span className={`decision ${run.plan.status}`}>{run.plan.status}</span></div>}</>}
         </section>
-          <section className="panel architecture-panel"><div className="panel-head"><div><small>ORCHESTRATION</small><h2>协作机制</h2></div><span className="langgraph">LANGGRAPH</span></div><div className="flow-strip"><span>QUALITY</span><b>→</b><span>PARALLEL SPECIALISTS</span><b>→</b><span>CONFLICT REVIEW</span><b>→</b><span>COACH</span><b>→</b><span>RISK GATE</span></div><p>Agent 任务各自独立调用模型并保存运行记录。当前推理并发限制为 1，防止 4GB 显存争用；冲突复核最多一轮。</p></section>
+          <section className="panel architecture-panel"><div className="panel-head"><div><small>ORCHESTRATION</small><h2>协作机制</h2></div><span className="langgraph">LANGGRAPH</span></div><div className="flow-strip"><span>QUALITY</span><b>→</b><span>PARALLEL SPECIALISTS</span><b>→</b><span>CONFLICT REVIEW</span><b>→</b><span>COACH</span><b>→</b><span>RISK GATE</span></div><p>Agent 任务各自独立调用模型并保存运行记录。当前推理并发限制为 1，兼顾本地显存和云端限流；冲突复核最多一轮。</p></section>
           <section className="panel learning-panel"><div className="panel-head"><div><small>FEEDBACK LOOP</small><h2>自主学习与周报</h2></div><span className="version">VERSIONED</span></div>{report && <><div className="weekly-strip"><span><b>{report.sessions}</b> 本周训练</span><span><b>{report.adherence_pct ?? '--'}%</b> 执行率</span><span><b>{report.median_rpe ?? '--'}</b> 中位 RPE</span><span><b>{report.weight_sample_count}</b> 体重样本</span></div><div className="weekly-advice"><b>本周建议 · {report.confidence === 'medium' ? '中等置信度' : '低置信度'}</b><ul>{(report.recommendations || []).map((item: string, index: number) => <li key={index}>{item}</li>)}</ul></div></>}{proposals.length ? proposals.slice(0,3).map(p => <div className="proposal" key={p.id}><div><b>{p.parameter} → {String(p.proposed_value)}</b><small>{p.rationale} · 样本 {p.sample_count} · {p.confidence}</small></div><span className={`proposal-state ${p.status}`}>{p.status}</span>{p.status === 'pending' && <div className="proposal-actions"><button type="button" onClick={() => decideProposal(p.id,'approve')}>应用</button><button type="button" onClick={() => decideProposal(p.id,'reject')}>驳回</button></div>}</div>) : <div className="callout">完成并记录训练动作后，Learning Agent 会在这里提交带证据的画像更新。</div>}<div className="callout">低风险提案满足阈值后自动应用；高影响变更须确认。模型不能修改提示词和安全策略。</div></section>
         </div>
       </div>
-      <footer>FORM / PERSONAL FITNESS AGENT PLATFORM <span>本地优先 · 模型建议需由本人判断</span></footer>
+      <footer>FORM / PERSONAL FITNESS AGENT PLATFORM <span>本地编排 · 模型建议需由本人判断</span></footer>
     </main>
   </div>;
 }

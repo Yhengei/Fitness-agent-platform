@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db import SessionLocal, get_session
 from app.models import AgentRun, CheckIn, LearningProfileVersion, LearningProposalRow, PlanningRun, Profile
-from app.provider import MODEL, PROVIDER
+from app.provider import MODEL, PROVIDER, configuration_error, runtime_metadata
 from app.reports import weekly_recommendations
 from app.schemas import AgentRunView, CheckInInput, PlanningRunView, ProfileInput
 from app.worker import run_planning
@@ -46,11 +46,7 @@ def ready(session: Session = Depends(get_session)):
 
 @app.get("/api/v1/system/runtime")
 def runtime():
-    return {
-        "provider": PROVIDER,
-        "model": MODEL,
-        "mode": "simulated" if PROVIDER == "fake" else "live-local",
-    }
+    return runtime_metadata()
 
 
 @app.post("/api/v1/profile")
@@ -94,6 +90,8 @@ def list_checkins(session: Session = Depends(get_session)):
 
 @app.post("/api/v1/planning-runs", status_code=202)
 def create_run(checkin_id: UUID, session: Session = Depends(get_session)):
+    if error := configuration_error():
+        raise HTTPException(503, detail=error)
     checkin = session.get(CheckIn, checkin_id)
     if not checkin:
         raise HTTPException(404, detail="check-in not found")
