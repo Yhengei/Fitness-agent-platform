@@ -17,6 +17,10 @@ MODEL_API_KEY = os.getenv("MODEL_API_KEY", "")
 MODEL = MODEL_NAME if PROVIDER == "openai_compatible" else OLLAMA_MODEL
 MODEL_GATES: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
 MODEL_GATES_LOCK = threading.Lock()
+LANGUAGE_RULE = (
+    "所有自然语言内容必须使用简体中文，包括 title、summary、rationale、decision、"
+    "evidence.claim 和 impact 说明。JSON 字段名以及 schema 明确规定的枚举值保持原样。"
+)
 
 
 class ProviderError(RuntimeError):
@@ -93,7 +97,7 @@ def _messages(agent: str, context: dict[str, Any], schema: type[BaseModel]) -> l
     return [
         {
             "role": "system",
-            "content": f"{system_prompt(agent)} 输出必须匹配此 JSON Schema：{schema_text}",
+            "content": f"{LANGUAGE_RULE}\n{system_prompt(agent)} 输出必须匹配此 JSON Schema：{schema_text}",
         },
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
@@ -164,7 +168,7 @@ async def generate_openai_compatible(
 
 async def generate_ollama(agent: str, context: dict[str, Any], schema: type[BaseModel]) -> BaseModel:
     messages = [
-        {"role": "system", "content": system_prompt(agent)},
+        {"role": "system", "content": f"{LANGUAGE_RULE}\n{system_prompt(agent)}"},
         {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
     ]
     async with model_gate():

@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 import app.provider as provider
-from app.provider import ProviderError, fake_result
+from app.provider import ProviderError, _messages, fake_result
 from app.schemas import SpecialistOutput, TrainingOutput
 
 
@@ -41,6 +41,13 @@ def specialist_payload() -> dict:
         "constraints": {"allow_progression": True},
         "rationale": "恢复状态允许正常训练。",
     }
+
+
+def test_cloud_messages_require_simplified_chinese():
+    messages = _messages("training", {}, TrainingOutput)
+
+    assert "所有自然语言内容必须使用简体中文" in messages[0]["content"]
+    assert "JSON Schema" in messages[0]["content"]
 
 
 def configure_cloud(monkeypatch):
