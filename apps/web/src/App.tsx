@@ -4,8 +4,8 @@ type Agent = { id: string; agent: string; status: string; output?: Record<string
 type Run = { id: string; status: string; provider: string; model: string; plan?: Record<string, any>; conflicts: Record<string, any>[]; agents: Agent[] };
 type Proposal = { id: string; status: string; parameter: string; proposed_value: string | number; sample_count: number; confidence: string; rationale: string };
 type Runtime = { provider: string; provider_label: string; model: string; mode: string; api_key_configured: boolean; api_key_hint: string | null };
-const names: Record<string, string> = { quality: '数据质检 Agent', recovery: '恢复 Agent', training: '训练 Agent', fat_loss: '减脂 Agent', review: '冲突复核 Agent', coach: '总教练 Agent', risk: '风险审核 Agent' };
-const statusNames: Record<string, string> = { queued: '排队中', running: '运行中', succeeded: '已完成', completed: '已完成', failed: '失败', idle: '等待提交', 'no conflict': '无冲突跳过', waiting: '等待中' };
+const names: Record<string, string> = { quality: '数据质检 Agent', recovery: '恢复 Agent', training: '训练 Agent', fat_loss: '减脂 Agent', review: '冲突复核 Agent', coach: '总教练 Agent', risk: '风险审核 Agent', learning: '学习 Agent' };
+const statusNames: Record<string, string> = { queued: '排队中', running: '运行中', succeeded: '已完成', completed: '已完成', failed: '失败', skipped: '已跳过', idle: '等待提交', 'no conflict': '无冲突跳过', waiting: '等待中' };
 const providerNames: Record<string, string> = { openai_compatible: '阿里云百炼', ollama: 'Ollama', fake: '模拟 Provider' };
 const statusLabel = (value?: string) => value ? (statusNames[value] || value) : '';
 const today = () => {

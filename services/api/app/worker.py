@@ -43,7 +43,7 @@ def run_planning(run_id: str):
             run.status = result.get("status", "completed")
             run.plan = result.get("final_plan")
             run.conflicts = result.get("conflicts", [])
-            if checkin.data.get("did_train") and checkin.data.get("exercises"):
+            if checkin.data.get("did_train"):
                 learning_started = time.perf_counter()
                 try:
                     rpe_records = [
@@ -82,6 +82,19 @@ def run_planning(run_id: str):
                         session.add(LearningProfileVersion(values=learned_values, source_proposal_id=proposal_row.id))
                 except Exception as learning_error:
                     session.add(AgentRun(planning_run_id=run.id, agent="learning", status="failed", error=str(learning_error)[:1000], duration_ms=int((time.perf_counter() - learning_started) * 1000)))
+            else:
+                session.add(
+                    AgentRun(
+                        planning_run_id=run.id,
+                        agent="learning",
+                        status="skipped",
+                        output={
+                            "reason": "本次记录没有实际训练反馈，学习 Agent 等待下一次训练数据。",
+                            "next_step": "勾选今天进行了训练，并填写训练 RPE；动作明细可选。",
+                        },
+                        duration_ms=0,
+                    )
+                )
             session.commit()
         except Exception as exc:
             run.status = "failed"
